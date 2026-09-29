@@ -1,0 +1,30 @@
+services:
+  lsm:
+    build: .
+    image: linux-server-manager:latest
+    restart: unless-stopped
+    # Localhost only by default. Expose it through an HTTPS reverse proxy;
+    # see README.md before publishing it on the network.
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      LSM_HOST_ROOT: /host
+      # Only if you serve the app over plain HTTP (not recommended):
+      # LSM_COOKIE_SECURE: "false"
+    volumes:
+      - lsm-data:/data
+      # Host filesystem, read-only, so metrics describe the host rather than
+      # the container. rslave propagates mounts made after the container starts.
+      - /:/host:ro,rslave
+    # Report the host's hostname instead of the container ID.
+    uts: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  lsm-data:

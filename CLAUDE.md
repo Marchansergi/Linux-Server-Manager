@@ -267,3 +267,19 @@ When working on this project:
 
 If requirements are ambiguous, identify the ambiguity
 before making a potentially destructive architectural decision.
+
+---
+
+# Repository Layout and Commands
+
+- `backend/`: FastAPI app. Routes (`app/api/routes`) call services
+  (`app/services`); services read the system through psutil and `/proc`.
+- `frontend/`: React + TypeScript + Tailwind (Vite). E2E tests live in
+  `frontend/e2e` and run against the real backend.
+
+Checks to run before committing:
+
+```bash
+cd backend && uv run ruff format --check . && uv run ruff check . && uv run mypy app tests && uv run pytest
+cd frontend && npm run typecheck && npm run build && npm run test:e2e
+```
