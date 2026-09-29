@@ -35,9 +35,23 @@ def parse_os_release(content: str) -> dict[str, str]:
     return fields
 
 
+def _host_path(host_root: Path, relative: str) -> Path:
+    """Resolve a host path, keeping an absolute symlink inside ``host_root``.
+
+    Inside a container, the host's ``/etc/os-release -> /usr/lib/os-release``
+    would otherwise point at the container's own file.
+    """
+    path = host_root / relative
+    if path.is_symlink():
+        target = path.readlink()
+        if target.is_absolute():
+            return host_root / target.relative_to("/")
+    return path
+
+
 def read_os_name(host_root: Path) -> str | None:
     for relative in OS_RELEASE_PATHS:
-        path = host_root / relative
+        path = _host_path(host_root, relative)
         try:
             fields = parse_os_release(path.read_text(encoding="utf-8", errors="replace"))
         except FileNotFoundError:

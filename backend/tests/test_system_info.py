@@ -41,6 +41,20 @@ def test_read_os_name_falls_back_to_usr_lib_and_name(tmp_path: Path) -> None:
     assert read_os_name(tmp_path) == "Alpine Linux"
 
 
+def test_read_os_name_keeps_absolute_symlinks_inside_host_root(tmp_path: Path) -> None:
+    _write(tmp_path, "usr/lib/os-release", 'PRETTY_NAME="Host OS"\n')
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc/os-release").symlink_to("/usr/lib/os-release")
+    assert read_os_name(tmp_path) == "Host OS"
+
+
+def test_read_os_name_follows_relative_symlinks(tmp_path: Path) -> None:
+    _write(tmp_path, "usr/lib/os-release", 'PRETTY_NAME="Host OS"\n')
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc/os-release").symlink_to("../usr/lib/os-release")
+    assert read_os_name(tmp_path) == "Host OS"
+
+
 def test_read_os_name_missing_file(tmp_path: Path) -> None:
     assert read_os_name(tmp_path) is None
 

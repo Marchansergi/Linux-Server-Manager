@@ -10,8 +10,8 @@ from app.services.storage import (
     StorageUnavailableError,
     get_storage_stats,
     mounts_file,
+    parse_block_fstypes,
     parse_mounts,
-    parse_nodev_fstypes,
     select_storage_mounts,
 )
 
@@ -27,13 +27,17 @@ tmpfs /run tmpfs rw 0 0
 tank/data /tank zfs rw 0 0
 server:/export /mnt/nfs nfs4 rw 0 0
 overlay /var/lib/docker/overlay2/x/merged overlay rw 0 0
+nsfs /run/docker/netns/abc nsfs rw 0 0
+/dev/fuse /mnt/sshfs fuse.sshfs rw 0 0
+/dev/sdc1 /mnt/windows fuseblk rw 0 0
 short line
 """
 FILESYSTEMS = (
     "nodev\tsysfs\nnodev\tproc\nnodev\ttmpfs\n\text4\n"
-    "nodev\tnfs4\nnodev\toverlay\nnodev\tzfs\n\txfs\n"
+    "nodev\tnfs4\nnodev\toverlay\nnodev\tzfs\n\txfs\n\tsquashfs\n"
+    "nodev\tfuse\n\tfuseblk\n"
 )
-NODEV = parse_nodev_fstypes(FILESYSTEMS)
+BLOCK_FSTYPES = parse_block_fstypes(FILESYSTEMS)
 
 
 def test_parse_mounts_unescapes_and_skips_malformed_lines() -> None:
@@ -42,13 +46,14 @@ def test_parse_mounts_unescapes_and_skips_malformed_lines() -> None:
     assert all(entry.device != "short" for entry in entries)
 
 
-def test_parse_nodev_fstypes() -> None:
-    assert {"sysfs", "proc", "tmpfs", "nfs4", "overlay", "zfs"} == NODEV
+def test_parse_block_fstypes() -> None:
+    assert {"ext4", "xfs", "squashfs", "fuseblk"} == BLOCK_FSTYPES
 
 
 def test_select_storage_mounts_filters_and_deduplicates() -> None:
-    selected = select_storage_mounts(parse_mounts(MOUNTS), NODEV)
-    assert [entry.mountpoint for entry in selected] == ["/", "/mnt/my disk", "/tank"]
+    selected = select_storage_mounts(parse_mounts(MOUNTS), BLOCK_FSTYPES)
+    mountpoints = [entry.mountpoint for entry in selected]
+    assert mountpoints == ["/", "/mnt/my disk", "/tank", "/mnt/windows"]
 
 
 def test_mounts_file_location(tmp_path: Path) -> None:
@@ -77,8 +82,9 @@ def test_get_storage_stats_resolves_paths_under_host_root(
 
     monkeypatch.setattr(psutil, "disk_usage", disk_usage)
     stats = get_storage_stats(host_root)
-    assert queried == [str(host_root), str(host_root / "mnt/my disk"), str(host_root / "tank")]
-    assert [p.mountpoint for p in stats.partitions] == ["/", "/mnt/my disk", "/tank"]
+    mountpoints = ["/", "/mnt/my disk", "/tank", "/mnt/windows"]
+    assert queried == [str(host_root / m.lstrip("/")) for m in mountpoints]
+    assert [p.mountpoint for p in stats.partitions] == mountpoints
     assert stats.partitions[0].model_dump() == {
         "device": "/dev/sda1",
         "mountpoint": "/",
@@ -96,7 +102,7 @@ def test_unreadable_or_empty_partitions_are_skipped_and_logged(
     def disk_usage(path: str) -> Usage:
         if path.endswith("disk"):
             raise PermissionError("denied")
-        if path.endswith("tank"):
+        if path.endswith(("tank", "windows")):
             return Usage(total=0, used=0, free=0, percent=0.0)
         return Usage(total=100, used=40, free=60, percent=40.0)
 

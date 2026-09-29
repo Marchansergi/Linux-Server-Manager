@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 HOST_ROOT = Path("/")
 PROC_FILESYSTEMS = Path("/proc/filesystems")
-# Not flagged "nodev" by the kernel but not real storage (snap images, etc.).
+# Block-device filesystem that is not real storage (snap images, etc.).
 EXCLUDED_FSTYPES = frozenset({"squashfs"})
-# Flagged "nodev" but backed by real storage.
-INCLUDED_NODEV_FSTYPES = frozenset({"zfs"})
+# Flagged "nodev" by the kernel but backed by real storage.
+EXTRA_STORAGE_FSTYPES = frozenset({"zfs"})
 _OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")
 
 
@@ -53,8 +53,13 @@ def parse_mounts(content: str) -> list[MountEntry]:
     return entries
 
 
-def parse_nodev_fstypes(content: str) -> frozenset[str]:
-    return frozenset(line.split()[-1] for line in content.splitlines() if line.startswith("nodev"))
+def parse_block_fstypes(content: str) -> frozenset[str]:
+    """Filesystem types the kernel registers as backed by a block device."""
+    return frozenset(
+        fields[0]
+        for line in content.splitlines()
+        if (fields := line.split()) and not line.startswith("nodev")
+    )
 
 
 def mounts_file(host_root: Path) -> Path:
@@ -63,31 +68,32 @@ def mounts_file(host_root: Path) -> Path:
     return host_root / "proc/1/mounts"
 
 
-def _is_storage(entry: MountEntry, nodev_fstypes: frozenset[str]) -> bool:
+def _is_storage(entry: MountEntry, block_fstypes: frozenset[str]) -> bool:
+    # An allowlist: pseudo filesystems (some, like nsfs, are not even listed in
+    # /proc/filesystems) and network filesystems are excluded. statvfs on a dead
+    # network mount can hang, so skipping them also keeps this endpoint responsive.
     if entry.fstype in EXCLUDED_FSTYPES:
         return False
-    # Network and pseudo filesystems are "nodev"; statvfs on a dead network
-    # mount can hang, so skipping them also keeps this endpoint responsive.
-    return entry.fstype in INCLUDED_NODEV_FSTYPES or entry.fstype not in nodev_fstypes
+    return entry.fstype in block_fstypes or entry.fstype in EXTRA_STORAGE_FSTYPES
 
 
 def select_storage_mounts(
-    entries: list[MountEntry], nodev_fstypes: frozenset[str]
+    entries: list[MountEntry], block_fstypes: frozenset[str]
 ) -> list[MountEntry]:
     """Keep real storage, one entry per device (bind mounts repeat devices)."""
     seen_devices: set[str] = set()
     selected = []
     for entry in entries:
-        if not _is_storage(entry, nodev_fstypes) or entry.device in seen_devices:
+        if not _is_storage(entry, block_fstypes) or entry.device in seen_devices:
             continue
         seen_devices.add(entry.device)
         selected.append(entry)
     return selected
 
 
-def _read_nodev_fstypes() -> frozenset[str]:
+def _read_block_fstypes() -> frozenset[str]:
     try:
-        return parse_nodev_fstypes(PROC_FILESYSTEMS.read_text(encoding="utf-8"))
+        return parse_block_fstypes(PROC_FILESYSTEMS.read_text(encoding="utf-8"))
     except OSError as exc:
         raise StorageUnavailableError(f"Cannot read {PROC_FILESYSTEMS}: {exc}") from exc
 
@@ -121,6 +127,6 @@ def _usage(entry: MountEntry, host_root: Path) -> Partition | None:
 
 
 def get_storage_stats(host_root: Path) -> StorageStats:
-    mounts = select_storage_mounts(_read_mounts(host_root), _read_nodev_fstypes())
+    mounts = select_storage_mounts(_read_mounts(host_root), _read_block_fstypes())
     partitions = [p for entry in mounts if (p := _usage(entry, host_root)) is not None]
     return StorageStats(partitions=partitions)
